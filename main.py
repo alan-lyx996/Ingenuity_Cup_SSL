@@ -152,7 +152,7 @@ targetdata_path = f"./datasets/{targetdata}"
 # for self-supervised, the data are augmented here. Only self-supervised learning need augmentation
 # if subset= true, use a subset for debugging.
 # 调试开关
-subset = True
+subset = False
 
 # 利用data_generator分割数据集
 

@@ -17,9 +17,9 @@ from loss import *
 
 
 def one_hot_encoding(X):
+    """转换为onehot编码"""
     X = [int(x) for x in X]
     n_values = np.max(X) + 1
-    # 转换为onehot编码
     b = np.eye(n_values)[X]
     return b
 
@@ -27,20 +27,25 @@ def one_hot_encoding(X):
 def Trainer(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, train_dl, valid_dl, test_dl, device,
             logger, params, experiment_log_dir, training_mode, model_F=None, model_F_optimizer=None,
             classifier=None, classifier_optimizer=None):
+    """训练器"""
 
-    # start training
+    # 开始训练
+    # 记录器记录
     logger.debug("Training Started ....")
+    # 设置交叉熵损失函数
     criterion = nn.CrossEntropyLoss()
     # 调整学习率
     # 当参考的评价指标停止改进时, 降低学习率, factor为每次下降的比例, 训练过程中, 当指标连续patience次数还没有改进时, 降低学习率;
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(model_optimizer, 'min')
 
-    """Pretraining"""
+    """预训练模式"""
+
     if training_mode == "pre_train":
         print('Pretraining on source dataset')
         for epoch in range(1, params["num_epoch"] + 1):
-            # Train and validate
-            """Train. In fine-tuning, this part is also trained???"""
+            # 预训练模式，并返回相关测试参数
+            # 在预训练模式下，无需进行模型的测试
+            # 所以只有无标签数据集的损失，准确率和auc均为0
             train_loss, train_acc, train_auc = model_pretrain(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, criterion,
                                                               train_dl, params, device, training_mode, model_F=model_F, model_F_optimizer=model_F_optimizer)
 
@@ -50,23 +55,25 @@ def Trainer(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, t
                          f'Train Loss     : {train_loss:.4f}\t | \tTrain Accuracy     : {train_acc:2.4f}\t | \tTrain AUC : {train_auc:2.4f}\n'
                          )
 
-        # only save in self_supervised mode.
+        # 存储预训练模型
         os.makedirs(os.path.join(experiment_log_dir, "saved_models"), exist_ok=True)
         chkpoint = {'model_state_dict': model.state_dict(),}
         torch.save(chkpoint, os.path.join(experiment_log_dir, "saved_models", f'ckp_last.pt'))
         print('Pretrained model is stored at folder:{}'.format(experiment_log_dir+'saved_models'+'ckp_last.pt'))
 
-    # no need to run the evaluation for self-supervised mode.
+    """微调模式"""
     if training_mode != 'pre_train':
-        """fine-tune"""
-        print('Fine-tune  on Fine-tuning set')
+        print('Fine-tune on Fine-tuning set')
         performance_list = []
         total_f1 = []
         for epoch in range(1, params["num_epoch"] + 1):
             # 微调模型，并返回相关测试参数
-            valid_loss, valid_acc, valid_auc, valid_prc, emb_finetune, label_finetune, F1 = model_finetune(model, temporal_contr_model, valid_dl, params, device, training_mode,
-                                                   model_optimizer, model_F=model_F, model_F_optimizer=model_F_optimizer,
-                                                        classifier=classifier, classifier_optimizer=classifier_optimizer)
+            # 微调训练集损失、准确率、auc、prc、F1分数
+            # 也返回了微调的embbing和label
+            valid_loss, valid_acc, valid_auc, valid_prc, emb_finetune, label_finetune, F1 = \
+                model_finetune(model, temporal_contr_model, valid_dl, params, device, training_mode, model_optimizer,
+                               model_F=model_F, model_F_optimizer=model_F_optimizer, classifier=classifier,
+                               classifier_optimizer=classifier_optimizer)
 
             if training_mode != 'pre_train':  # use scheduler in all other modes.
                 scheduler.step(valid_loss)
@@ -85,12 +92,12 @@ def Trainer(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, t
             # total_f1.append(F1)
 
 
-            # evaluate on the test set
-            """Testing set"""
+            """在目标域测试集上进行测试"""
             logger.debug('\nTest on Target datasts test set')
             # model.load_state_dict(torch.load('experiments_logs/finetunemodel/' + arch + '_model.pt'))
             # classifier.load_state_dict(torch.load('experiments_logs/finetunemodel/' + arch + '_classifier.pt'))
-            # 在目标域数据集上进行测试
+            # 返回测试损失、准确率、auc、prc
+            # performance = [acc * 100, precision * 100, recall * 100, F1 * 100, total_auc * 100, total_prc * 100]
             test_loss, test_acc, test_auc, test_prc, emb_test, label_test, performance = model_test(model, temporal_contr_model, test_dl, params, device, training_mode,
                                                                 model_F=model_F, model_F_optimizer=model_F_optimizer,
                                                              classifier=classifier, classifier_optimizer=classifier_optimizer)
@@ -136,6 +143,7 @@ def Trainer(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, t
 
 def model_pretrain(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, criterion, train_loader, params,
                    device, training_mode, model_F=None, model_F_optimizer=None):
+    """预训练模块"""
     total_loss = []
     total_acc = []
     total_auc = []
@@ -147,39 +155,44 @@ def model_pretrain(model, temporal_contr_model, model_optimizer, temp_cont_optim
         data, labels = data.float().to(device), labels.long().to(device)
         # aug1 = data : [batch, 1, length]
         aug1 = aug1.float().to(device)
-        # data_f = aug1_f : [128, 1, 178]
+        # data_f = aug1_f : [batch, 1, length]
         data_f, aug1_f = data_f.float().to(device), aug1_f.float().to(device)
 
         # optimizer
         model_optimizer.zero_grad()
 
-        """Produce embeddings"""
+        """产生embeddings"""
         h_t, z_t, h_f, z_f = model(data, data_f)
         h_t_aug, z_t_aug, h_f_aug, z_f_aug = model(aug1, aug1_f)
 
 
-        """Compute Pre-train loss"""
-        """NTXentLoss: normalized temperature-scaled cross entropy loss. From SimCLR"""
-        # device=GPU, batch=128, temperature=0.2, use_cosin_similarity=True
+        """计算预训练损失"""
+        """NTXentLoss：归一化温度标度交叉熵损失。来自SimCLR"""
         nt_xent_criterion = NTXentLoss_poly(device, params["batch_size"], params["temperature"],
                                        params["use_cosine_similarity"])
 
+        # 计算时域的损失
         loss_t = nt_xent_criterion(h_t, h_t_aug)
+        # 计算频域的损失
         loss_f = nt_xent_criterion(h_f, h_f_aug)
-
+        # 计算时频空间里的时域和频域损失
         l_TF = nt_xent_criterion(z_t, z_f)
+        # 计算时频空间里时域和频域增强的损失，时域增强和频域的损失，时域增强和频域增强的损失
         l_1, l_2, l_3 = nt_xent_criterion(z_t, z_f_aug), nt_xent_criterion(z_t_aug, z_f), nt_xent_criterion(z_t_aug, z_f_aug)
+        # 根据Triplet loss，改进视频空间的总损失
         loss_c = (1+l_TF-l_1) + (1+l_TF-l_2) + (1+l_TF-l_3)
-
+        # 对时域、频域和时频空间的损失进行加权和
         lam = 0.2
         loss = lam*(loss_t + loss_f) + (1-lam)*loss_c
-
+        # 记录损失
         total_loss.append(loss.item())
+        # 损失反向传递
         loss.backward()
+        # 优化一步
         model_optimizer.step()
 
     print('preptraining: overall loss:{}, l_t: {}, l_f:{}, l_c:{}'.format(loss, loss_t, loss_f, loss_c))
-
+    # 求总损失，为所有损失的均值
     total_loss = torch.tensor(total_loss).mean()
     if training_mode == "pre_train":
         total_acc = 0
@@ -192,6 +205,7 @@ def model_pretrain(model, temporal_contr_model, model_optimizer, temp_cont_optim
 
 def model_finetune(model, temporal_contr_model, val_dl, params, device, training_mode, model_optimizer, model_F=None, model_F_optimizer=None,
                    classifier=None, classifier_optimizer=None):
+    """微调模块"""
     model.train()
     classifier.train()
 
@@ -205,7 +219,6 @@ def model_finetune(model, temporal_contr_model, val_dl, params, device, training
     trgs = np.array([])
 
     for data, labels, aug1, data_f, aug1_f in val_dl:
-        # print('Fine-tuning: {} of target samples'.format(labels.shape[0]))
         data, labels = data.float().to(device), labels.long().to(device)
         data_f = data_f.float().to(device)
         aug1 = aug1.float().to(device)
@@ -215,30 +228,36 @@ def model_finetune(model, temporal_contr_model, val_dl, params, device, training
         # model_optimizer.zero_grad()
         # model_F_optimizer.zero_grad()
 
-        """Produce embeddings"""
+        """产生embeddings"""
         h_t, z_t, h_f, z_f = model(data, data_f)
         h_t_aug, z_t_aug, h_f_aug, z_f_aug = model(aug1, aug1_f)
 
+        """计算微调损失"""
+        """NTXentLoss：归一化温度标度交叉熵损失。来自SimCLR"""
         nt_xent_criterion = NTXentLoss_poly(device, params["target_batch_size"], params["temperature"],
                                             params["use_cosine_similarity"])
+        # 计算时域损失
         loss_t = nt_xent_criterion(h_t, h_t_aug)
+        # 计算频域损失
         loss_f = nt_xent_criterion(h_f, h_f_aug)
-
+        # 计算时频空间内的损失
         l_TF = nt_xent_criterion(z_t, z_f)
         l_1, l_2, l_3 = nt_xent_criterion(z_t, z_f_aug), nt_xent_criterion(z_t_aug, z_f), nt_xent_criterion(z_t_aug,
                                                                                                             z_f_aug)
         loss_c = (1 + l_TF - l_1) + (1 + l_TF - l_2) + (1 + l_TF - l_3)
 
 
-        """Add supervised classifier: 1) it's unique to finetuning. 2) this classifier will also be used in test"""
+        """添加监督分类器：1）它是微调所特有的。2） 该分类器也将用于测试"""
         # 合并时域和频域的信息
         fea_concat = torch.cat((z_t, z_f), dim=1)
         # 此处定义为MLP
         predictions = classifier(fea_concat)
         # 将合并的特征图展平后输出，可用于其余分类器的训练
         fea_concat_flat = fea_concat.reshape(fea_concat.shape[0], -1)
+        # 计算监督性的多分类交叉熵损失
         loss_p = criterion(predictions, labels) # predictor loss, actually, here is training loss
 
+        # 所有的损失的加权和
         lam = 0.2
         loss = loss_p + (1-lam)*loss_c + lam*(loss_t + loss_f)
 
@@ -280,14 +299,15 @@ def model_finetune(model, temporal_contr_model, val_dl, params, device, training
     F1 = f1_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
     print('Testing: Precision = %.4f | Recall = %.4f | F1 = %.4f' % (precision * 100, recall * 100, F1 * 100))
 
-    # """Save embeddings for visualization"""
+    # """保存embeddings以进行可视化"""
     # pickle.dump(features1_f, open('embeddings/fea_t_withLc.p', 'wb'))
     # pickle.dump(fea_f, open('embeddings/fea_f_withLc.p', 'wb'))
     # print('embedding saved')
 
-    total_loss = torch.tensor(total_loss).mean()  # average loss
-    total_acc = torch.tensor(total_acc).mean()  # average acc
-    total_auc = torch.tensor(total_auc).mean()  # average acc
+    # 求取均值
+    total_loss = torch.tensor(total_loss).mean()
+    total_acc = torch.tensor(total_acc).mean()
+    total_auc = torch.tensor(total_auc).mean()
     total_prc = torch.tensor(total_prc).mean()
 
     return total_loss, total_acc, total_auc, total_prc, fea_concat_flat, trgs, F1
@@ -295,16 +315,17 @@ def model_finetune(model, temporal_contr_model, val_dl, params, device, training
 
 def model_test(model, temporal_contr_model, test_dl, params, device, training_mode, model_F=None, model_F_optimizer=None,
                classifier=None, classifier_optimizer=None):
+    """测试模块"""
+    # 将预训练模型和分类器置于评估模式，即不进行梯度传递
     model.eval()
     classifier.eval()
-
     total_loss = []
     total_acc = []
     total_auc = []
     total_prc = []
     total_precision, total_recall, total_f1 = [], [], []
-
-    criterion = nn.CrossEntropyLoss() # This loss is not used in gradient. It means nothing.
+    # 定义多分类交叉熵损失
+    criterion = nn.CrossEntropyLoss()
     outs = np.array([])
     trgs = np.array([])
     emb_test_all = []
@@ -316,18 +337,26 @@ def model_test(model, temporal_contr_model, test_dl, params, device, training_mo
             data, labels = data.float().to(device), labels.long().to(device)
             data_f = data_f.float().to(device)
 
-            """Add supervised classifier: 1) it's unique to finetuning. 2) this classifier will also be used in test"""
+            """添加监督分类器：1）它是微调所特有的。2） 该分类器也将用于测试"""
             h_t, z_t, h_f, z_f = model(data, data_f)
-
+            # 合并模型输出特征图
             fea_concat = torch.cat((z_t, z_f), dim=1)
-            predictions_test = classifier(fea_concat)  # how to define classifier? MLP? CNN?
+
+            # 输出MLP预测的结果
+            predictions_test = classifier(fea_concat)
+
+            # 展平特征图
             fea_concat_flat = fea_concat.reshape(fea_concat.shape[0], -1)
+            # 添加到一个列表里
             emb_test_all.append(fea_concat_flat)
 
             if training_mode != "pre_train":
+                # 计算分类损失
                 loss = criterion(predictions_test, labels)
+                # 计算准确度
                 acc_bs = labels.eq(predictions_test.detach().argmax(dim=1)).float().mean()
                 onehot_label = F.one_hot(labels)
+                # 输出预测标签和实际标签
                 pred_numpy = predictions_test.detach().cpu().numpy()
                 labels_numpy = labels.detach().cpu().numpy()
                 """避免发生只有一类的标签，无法回执ROC曲线"""
@@ -347,17 +376,19 @@ def model_test(model, temporal_contr_model, test_dl, params, device, training_mo
                 # recall = recall_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
                 # F1 = f1_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
 
+                # 将acc,auc,prc,loss添加到各自的列表里
                 total_acc.append(acc_bs)
                 total_auc.append(auc_bs)
                 total_prc.append(prc_bs)
-                # total_precision.append(precision)
-                # total_recall.append(recall)
-                # total_f1.append(F1)
-
                 total_loss.append(loss.item())
-                pred = predictions_test.max(1, keepdim=True)[1]  # get the index of the max log-probability
+
+                # 得到最大对数概率的索引。
+                pred = predictions_test.max(1, keepdim=True)[1]
+                # 添加预测标签到列表里
                 outs = np.append(outs, pred.cpu().numpy())
+                # 添加真实标签到列表里
                 trgs = np.append(trgs, labels.data.cpu().numpy())
+
             labels_numpy_all = np.concatenate((labels_numpy_all, labels_numpy))
             pred_numpy_all = np.concatenate((pred_numpy_all, pred_numpy))
     labels_numpy_all = labels_numpy_all
@@ -365,11 +396,13 @@ def model_test(model, temporal_contr_model, test_dl, params, device, training_mo
 
     # print('Test classification report', classification_report(labels_numpy_all, pred_numpy_all))
     # print(confusion_matrix(labels_numpy_all, pred_numpy_all))
+    # 计算精准度、召回率、F1分数和准确率
     precision = precision_score(labels_numpy_all, pred_numpy_all, average='macro', )
     recall = recall_score(labels_numpy_all, pred_numpy_all, average='macro', )
     F1 = f1_score(labels_numpy_all, pred_numpy_all, average='macro', )
     acc = accuracy_score(labels_numpy_all, pred_numpy_all, )
 
+    # 取均值
     total_loss = torch.tensor(total_loss).mean()
     total_acc = torch.tensor(total_acc).mean()
     total_auc = torch.tensor(total_auc).mean()

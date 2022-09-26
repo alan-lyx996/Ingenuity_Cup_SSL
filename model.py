@@ -1,7 +1,9 @@
 from torch import nn
 import torch
 
-class TFC(nn.Module): # Frequency domain encoder
+
+class TFC(nn.Module):
+    """时频域一致性编码器"""
     def __init__(self, params):
         super(TFC, self).__init__()
 
@@ -88,7 +90,8 @@ class TFC(nn.Module): # Frequency domain encoder
         return h_time, z_time, h_freq, z_freq
 
 
-class target_classifier(nn.Module): # Frequency domain encoder
+class target_classifier(nn.Module):
+    """目标域分类器"""
     def __init__(self, params):
         super(target_classifier, self).__init__()
         self.logits = nn.Linear(2*128, 64)

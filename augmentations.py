@@ -3,6 +3,7 @@ import torch
 
 
 def one_hot_encoding(X):
+    """将标签进行onehot编码"""
     X = [int(x) for x in X]
     n_values = np.max(X) + 1
     b = np.eye(n_values)[X]
@@ -10,57 +11,47 @@ def one_hot_encoding(X):
 
 
 def DataTransform(sample, params):
-    """Weak and strong augmentations"""
+    """弱增强或强增强"""
     weak_aug = scaling(sample, params["jitter_scale_ratio"])
-    # weak_aug = permutation(sample, max_segments=params["max_seg"])
     strong_aug = jitter(permutation(sample, max_segments=params["max_seg"]), params["jitter_ratio"])
 
     return weak_aug, strong_aug
 
-# def DataTransform_TD(sample, params):
-#     """Weak and strong augmentations"""
-#     weak_aug = sample
-#     strong_aug = jitter(permutation(sample, max_segments=params["max_seg"]), params["jitter_ratio"]) #masking(sample)
-#     return weak_aug, strong_aug
-#
-# def DataTransform_FD(sample, params):
-#     """Weak and strong augmentations in Frequency domain """
-#     # weak_aug =  remove_frequency(sample, 0.1)
-#     strong_aug = add_frequency(sample, 0.1)
-#     return weak_aug, strong_aug
-
 
 def DataTransform_TD(sample, params):
-    """Weak and strong augmentations"""
+    """时域增强"""
+    # 进行噪声扰动增强
     aug_1 = jitter(sample, params["jitter_ratio"])
+    # 进行尺度放缩增强
     aug_2 = scaling(sample, params["jitter_scale_ratio"])
+    # 进行随机置换增强
     aug_3 = permutation(sample, max_segments=params["max_seg"])
 
-    # there are three augmentations in Time domain
+    # 时域增强是上述三种增强的合成
+    # 随机生成数据增强的序列，即[0, 1, 2, ...,1, 2, 0, ...]，长度等于数据集的大小
     li = np.random.randint(0, 3, size=[sample.shape[0]])
     li_onehot = one_hot_encoding(li)
-    # the rows are not selected are set as zero.
-    # ll = li_onehot[:, 0]
-    # x = 1-li_onehot[:, 0]
 
+    # li_onehot的维度是[length, 3],那么1-li_onehot[:,0]的维度就是[length,1],且只有0与1两个元素，
+    # 即可以完成bool选择，选择出元素为0的保留，元素为1的向量置为0
     aug_1[1 - li_onehot[:, 0]] = 0
     aug_2[1 - li_onehot[:, 1]] = 0
     aug_3[1 - li_onehot[:, 2]] = 0
-    # aug_4[1 - li_onehot[:, 3]] = 0
-    aug_T = aug_1 + aug_2 + aug_3 #+aug_4
+    # 将三种增强的结果累加在一起，构成了增强数据库
+    aug_T = aug_1 + aug_2 + aug_3
     return aug_T
 
 
 def DataTransform_FD(sample, params):
-    """Weak and strong augmentations in Frequency domain """
-    # there are two augmentations in Frequency domain
+    """频域增强"""
+    # 去除频谱增强
     aug_1 = remove_frequency(sample, 0.1)
+    # 增加频谱增强
     aug_2 = add_frequency(sample, 0.1)
-    # generate random sequence
+
+    # 与时域增强相似的操作
     li = np.random.randint(0, 2, size=[sample.shape[0]])
     li_onehot = one_hot_encoding(li)
-    # the rows are not selected are set as zero.
-    # 一次性的针对相关的
     aug_1[1-li_onehot[:, 0]] = 0
     aug_2[1 - li_onehot[:, 1]] = 0
     aug_F = aug_1 + aug_2
@@ -72,6 +63,7 @@ def generate_binomial_mask(B, T, D, p=0.5):
 
 
 def masking(x, mask='binomial'):
+    """掩膜增强"""
     nan_mask = ~x.isnan().any(axis=-1)
     x[~nan_mask] = 0
     # x = self.input_fc(x)  # B x T x Ch
@@ -93,14 +85,15 @@ def masking(x, mask='binomial'):
     return x
 
 
-# 抖动
+
 def jitter(x, sigma=0.8):
+    """抖动增强"""
     # https://arxiv.org/pdf/1706.00527.pdf
     return x + np.random.normal(loc=0., scale=sigma, size=x.shape)
 
 
-# 尺度变换
 def scaling(x, sigma=1.1):
+    """尺度变换增强"""
     # https://arxiv.org/pdf/1706.00527.pdf
     factor = np.random.normal(loc=2., scale=sigma, size=(x.shape[0], x.shape[2]))
     ai = []
@@ -110,8 +103,8 @@ def scaling(x, sigma=1.1):
     return torch.from_numpy(np.concatenate((ai), axis=1))
 
 
-# 拼接
 def permutation(x, max_segments=5, seg_mode="random"):
+    """合并拼接增强"""
     orig_steps = np.arange(x.shape[2])
 
     num_segs = np.random.randint(1, max_segments, size=(x.shape[0]))
@@ -132,16 +125,16 @@ def permutation(x, max_segments=5, seg_mode="random"):
     return torch.from_numpy(ret)
 
 
-# 去除频域
 def remove_frequency(x, maskout_ratio=0):
+    """去除频谱增强"""
     # maskout_ratio are False
     mask = torch.cuda.FloatTensor(x.shape).uniform_() > maskout_ratio
     mask = mask.to(x.device)
     return x*mask
 
 
-# 增强频域
 def add_frequency(x, pertub_ratio=0,):
+    """增大频谱增强"""
     # only pertub_ratio of all values are True
     mask = torch.cuda.FloatTensor(x.shape).uniform_() > (1-pertub_ratio)
     mask = mask.to(x.device)

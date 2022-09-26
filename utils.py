@@ -8,6 +8,7 @@ import logging
 from sklearn.metrics import classification_report, cohen_kappa_score, confusion_matrix, accuracy_score
 from shutil import copy
 
+
 def set_requires_grad(model, dict_, requires_grad=True):
     for param in model.named_parameters():
         if param[0] in dict_:
@@ -15,6 +16,7 @@ def set_requires_grad(model, dict_, requires_grad=True):
 
 
 def fix_randomness(SEED):
+    """固定随机数"""
     random.seed(SEED)
     np.random.seed(SEED)
     torch.manual_seed(SEED)
@@ -23,6 +25,7 @@ def fix_randomness(SEED):
 
 
 def epoch_time(start_time, end_time):
+    """迭代时间的转换"""
     elapsed_time = end_time - start_time
     elapsed_mins = int(elapsed_time / 60)
     elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
@@ -60,9 +63,7 @@ def _calc_metrics(pred_labels, true_labels, log_dir, home_path):
 
 
 def _logger(logger_name, level=logging.DEBUG):
-    """
-    Method to return a custom logger with the given name and level
-    """
+    """方法返回具有给定名称和级别的自定义记录器"""
     logger = logging.getLogger(logger_name)
     logger.setLevel(level)
     # format_string = ("%(asctime)s — %(name)s — %(levelname)s — %(funcName)s:"
