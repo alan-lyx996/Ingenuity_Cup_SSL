@@ -11,7 +11,7 @@ from scipy.io import loadmat
 
 class Load_Dataset(Dataset):
     # Initialize your data, download, etc.
-    def __init__(self, dataset, params, training_mode, target_dataset_size=64, subset=False):
+    def __init__(self, dataset, params, params_keep, training_mode, target_dataset_size=64, subset=False):
         super(Load_Dataset, self).__init__()
         # 获取训练模式，预训练还是微调
         self.training_mode = training_mode
@@ -35,7 +35,7 @@ class Load_Dataset(Dataset):
             X_train = X_train.permute(0, 2, 1)
 
         # 在源数据集和目标数据集之间调整TS长度
-        X_train = X_train[:, :1, :int(params["TSlength_aligned"])]
+        X_train = X_train[:, :1, :int(params_keep["TSlength_aligned"])]
 
         """Subset for debugging"""
         # 如果Subset是True，则采用仅有十倍的目标数据集大小的源训练集，选取100倍的源测试数据集
@@ -76,7 +76,7 @@ class Load_Dataset(Dataset):
         return self.len
 
 
-def data_generator(sourcedata_path, targetdata_path, params, training_mode, subset=True):
+def data_generator(sourcedata_path, targetdata_path, params, params_keep, training_mode, subset=True):
     """数据生成操作"""
     # 加载训练数据集、微调数据集和测试数据集
     train_dataset = torch.load(os.path.join(sourcedata_path, "train.pt"))
@@ -85,25 +85,25 @@ def data_generator(sourcedata_path, targetdata_path, params, training_mode, subs
     # subset = True
     # subset是调试开关，打开调试开关后，目标域的数据集大小仅为batch的10倍
     # 对于自监督学习，数据集在此进行了扩充
-    train_dataset = Load_Dataset(train_dataset, params, training_mode, target_dataset_size=params["batch_size"], subset=subset)
-    finetune_dataset = Load_Dataset(finetune_dataset, params, training_mode, target_dataset_size=params["target_batch_size"], subset=subset)
+    train_dataset = Load_Dataset(train_dataset, params, params_keep, training_mode, target_dataset_size=params_keep["batch_size"], subset=subset)
+    finetune_dataset = Load_Dataset(finetune_dataset, params, params_keep, training_mode, target_dataset_size=params_keep["target_batch_size"], subset=subset)
     # 将测试数据集的大小设置为目标域训练数据集大小的10倍或以下
-    if test_dataset['labels'].shape[0] > 10*params["target_batch_size"]:
-        test_dataset = Load_Dataset(test_dataset, params, training_mode, target_dataset_size=params["target_batch_size"]*10, subset=subset)
+    if test_dataset['labels'].shape[0] > 10*params_keep["target_batch_size"]:
+        test_dataset = Load_Dataset(test_dataset, params, params_keep, training_mode, target_dataset_size=params_keep["target_batch_size"]*10, subset=subset)
     else:
-        test_dataset = Load_Dataset(test_dataset, params, training_mode, target_dataset_size=params["target_batch_size"], subset=subset)
+        test_dataset = Load_Dataset(test_dataset, params, params_keep,training_mode, target_dataset_size=params_keep["target_batch_size"], subset=subset)
     # 将训练数据集载入Dataloader
-    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=params["batch_size"],
-                                               shuffle=True, drop_last=params["drop_last"],
+    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=params_keep["batch_size"],
+                                               shuffle=True, drop_last=params_keep["drop_last"],
                                                num_workers=0)
 
     """需要注意的是，此处命名时，将常用的验证数据集用于微调数据集的命名"""
     # 将微调数据集和测试数据集载入Dataloader,且只在微调阶段使用
-    valid_loader = torch.utils.data.DataLoader(dataset=finetune_dataset, batch_size=params["target_batch_size"],
-                                               shuffle=True, drop_last=params["drop_last"],
+    valid_loader = torch.utils.data.DataLoader(dataset=finetune_dataset, batch_size=params_keep["target_batch_size"],
+                                               shuffle=True, drop_last=params_keep["drop_last"],
                                                num_workers=0)
 
-    test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=params["target_batch_size"],
+    test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=params_keep["target_batch_size"],
                                               shuffle=True, drop_last=False,
                                               num_workers=0)
 

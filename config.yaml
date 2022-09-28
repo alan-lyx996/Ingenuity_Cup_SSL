@@ -1,119 +1,51 @@
 search_space:
-  # 不变的相关参数
-  input_channels:
-    _type: choice
-    _value: [ 1, ]
-  kernel_size:
-    _type: choice
-    _value: [ 32, ]
-  stride:
-    _type: choice
-    _value: [ 4, ]
-  final_out_channels:
-    _type: choice
-    _value: [ 128, ]
-  features_len:
-    _type: choice
-    _value: [ 162, ]
-  num_classes:
-    _type: choice
-    _value: [ 10, ]
-  num_epoch:
-    _type: choice
-    _value: [ 40, ]
-  batch_size:
-    _type: choice
-    _value: [ 64, ]
-  optimizer:
-    _type: choice
-    _value: ["adam", ]
-  drop_last:
-    _type: choice
-    _value: [ True, ]
-  TSlength_aligned:
-    _type: choice
-    _value: [ 5120, ]
-
-  target_batch_size:
-    _type: choice
-    _value: [ 64, ]
-  increased_dim:
-    _type: choice
-    _value: [ 1, ]
-  num_classes_target:
-    _type: choice
-    _value: [ 10, ]
-  features_len_f:
-    _type: choice
-    _value: [ 162, ]
-  CNNoutput_channel:
-    _type: choice
-    _value: [ 162, ]
-  # TC参数
-  hidden_dim:
-    _type: chioce
-    _value: [64, ]
-
-  timesteps:
-    _type: chioce
-    _value: [50, ]
-
-  # 损失函数的参数，分别是温度系数和相似度函数的选取
-  temperature:
-    _type: chioce
-    _value: [ 0.2, ]
-  use_cosine_similarity:
-    _type: chioce
-    _value: [ True, ]
-
-  # dropout 调优
-  dropout:
-    _type: uniform
-    _value: [ 0.35, 0.65]
-
-  corruption_prob:
-    _type: loguniform
-    _value: [ 0.3, 0.7 ]
-
-  # adam优化器的beta和beta1参数
   beta1:
     _type: choice
-    _value: [ 0.9, 0.99 ]
+    _value: [0.9, 0.99]
   beta2:
     _type: choice
-    _value: [ 0.99, 0.999 ]
-  # 学习率
+    _value: [0.99, 0.999]
   lr:
     _type: loguniform
-    _value: [ 0.0001, 0.1 ]
-  # 分类器学习率
+    _value: [0.0001, 0.1]
   lr_f:
     _type: loguniform
-    _value: [ 0.0001, 0.1 ]
-  # augmentations的相关参数
+    _value: [0.0001, 0.1]
   jitter_scale_ratio:
-    _type: loguniform
-    _value: [ 0, 2.0 ]
+    _type: uniform
+    _value: [0, 2.0]
   jitter_ratio:
-    _type: loguniform
+    _type: uniform
     _value: [0, 0.5]
+  f_remove:
+    _type: uniform
+    _value: [0, 0.2]
+  f_add:
+    _type: uniform
+    _value: [0, 0.2]
   max_seg:
-    _type: choice
-    _value: [5,]
+    _type: randint
+    _value: [5, 10]
 
 
+experimentName: Ingenuity_Cup_CWRU
 
-trial_command: python main.py
+trial_command: python main_nni.py
 trial_code_directory: .
+trialGpuNumber: 1
 
-trial_concurrency: 5
-max_trial_number: 200
-max_experiment_duration: "3h"
+trial_concurrency: 1
+max_trial_number: 50
+max_experiment_duration: "4h"
 
 tuner:
   name: TPE
   class_args:
     optimize_mode: maximize
 
+assessor:
+  name: "Medianstop"
+
 training_service:
   platform: local
+  useActiveGpu: True

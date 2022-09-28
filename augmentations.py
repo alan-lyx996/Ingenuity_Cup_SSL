@@ -45,9 +45,9 @@ def DataTransform_TD(sample, params):
 def DataTransform_FD(sample, params):
     """频域增强"""
     # 去除频谱增强
-    aug_1 = remove_frequency(sample, 0.1)
+    aug_1 = remove_frequency(sample, params["f_remove"])
     # 增加频谱增强
-    aug_2 = add_frequency(sample, 0.1)
+    aug_2 = add_frequency(sample, params["f_add"])
 
     # 与时域增强相似的操作
     li = np.random.randint(0, 2, size=[sample.shape[0]])

@@ -24,16 +24,26 @@ def one_hot_encoding(X):
     return b
 
 
-def Trainer(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, train_dl, valid_dl, test_dl, device,
-            logger, params, experiment_log_dir, training_mode, model_F=None, model_F_optimizer=None,
-            classifier=None, classifier_optimizer=None):
-    """训练器"""
-
+def Trainer(model, model_optimizer, train_dl, valid_dl, test_dl, device, logger, params_keep, experiment_log_dir,
+            training_mode, classifier=None, classifier_optimizer=None):
+    """
+    Args:
+        model: 时频一致性（TFC）自监督模型
+        model_optimizer: TFC优化器
+        train_dl: 源训练集
+        valid_dl: 目标训练集
+        test_dl: 目标测试集
+        device: 设备，cuda/CPU
+        logger: 记录器
+        params: 参数空间
+        experiment_log_dir:实验存储地址
+        training_mode: 训练模式
+        classifier: 分类器
+        classifier_optimizer:分类器优化器
+    """
     # 开始训练
     # 记录器记录
     logger.debug("Training Started ....")
-    # 设置交叉熵损失函数
-    criterion = nn.CrossEntropyLoss()
     # 调整学习率
     # 当参考的评价指标停止改进时, 降低学习率, factor为每次下降的比例, 训练过程中, 当指标连续patience次数还没有改进时, 降低学习率;
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(model_optimizer, 'min')
@@ -42,18 +52,14 @@ def Trainer(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, t
 
     if training_mode == "pre_train":
         print('Pretraining on source dataset')
-        for epoch in range(1, params["num_epoch"] + 1):
+        for epoch in range(1, params_keep["num_epoch"] + 1):
             # 预训练模式，并返回相关测试参数
             # 在预训练模式下，无需进行模型的测试
             # 所以只有无标签数据集的损失，准确率和auc均为0
-            train_loss, train_acc, train_auc = model_pretrain(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, criterion,
-                                                              train_dl, params, device, training_mode, model_F=model_F, model_F_optimizer=model_F_optimizer)
-
+            train_loss, feature_flat = model_pretrain(model, model_optimizer, train_dl, params_keep, device)
             if training_mode != 'self_supervised':  # use scheduler in all other modes.
                 scheduler.step(train_loss)
-            logger.debug(f'\nPre-training Epoch : {epoch}\n'
-                         f'Train Loss     : {train_loss:.4f}\t | \tTrain Accuracy     : {train_acc:2.4f}\t | \tTrain AUC : {train_auc:2.4f}\n'
-                         )
+            logger.debug(f'\nPre-training Epoch : {epoch}\n' f'Train Loss     : {train_loss:.4f}\t')
 
         # 存储预训练模型
         os.makedirs(os.path.join(experiment_log_dir, "saved_models"), exist_ok=True)
@@ -66,22 +72,18 @@ def Trainer(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, t
         print('Fine-tune on Fine-tuning set')
         performance_list = []
         total_f1 = []
-        for epoch in range(1, params["num_epoch"] + 1):
+        for epoch in range(1, params_keep["num_epoch"] + 1):
             # 微调模型，并返回相关测试参数
             # 微调训练集损失、准确率、auc、prc、F1分数
             # 也返回了微调的embbing和label
-            valid_loss, valid_acc, valid_auc, valid_prc, emb_finetune, label_finetune, F1 = \
-                model_finetune(model, temporal_contr_model, valid_dl, params, device, training_mode, model_optimizer,
-                               model_F=model_F, model_F_optimizer=model_F_optimizer, classifier=classifier,
-                               classifier_optimizer=classifier_optimizer)
+            valid_loss, valid_acc = model_finetune(model, valid_dl, params_keep, device, model_optimizer, classifier, classifier_optimizer)
 
             if training_mode != 'pre_train':  # use scheduler in all other modes.
                 scheduler.step(valid_loss)
             logger.debug(f'\nEpoch : {epoch}\n'
-                         f'finetune Loss  : {valid_loss:.4f}\t | \tfinetune Accuracy : {valid_acc:2.4f}\t | '
-                         f'\tfinetune AUC : {valid_auc:2.4f} \t |finetune PRC: {valid_prc:0.4f} ')
+                         f'finetune Loss  : {valid_loss:.4f}\t | \tfinetune Accuracy : {valid_acc:2.4f}\t | ')
 
-            # # save best fine-tuning model""
+            # save best fine-tuning model""
             # global arch
             # arch = 'sleepedf2eplipsy'
             # if len(total_f1) == 0 or F1 > max(total_f1):
@@ -90,63 +92,22 @@ def Trainer(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, t
             #     torch.save(model.state_dict(), 'experiments_logs/finetunemodel/' + arch + '_model.pt')
             #     torch.save(classifier.state_dict(), 'experiments_logs/finetunemodel/' + arch + '_classifier.pt')
             # total_f1.append(F1)
-
-
             """在目标域测试集上进行测试"""
             logger.debug('\nTest on Target datasts test set')
             # model.load_state_dict(torch.load('experiments_logs/finetunemodel/' + arch + '_model.pt'))
             # classifier.load_state_dict(torch.load('experiments_logs/finetunemodel/' + arch + '_classifier.pt'))
-            # 返回测试损失、准确率、auc、prc
+
+            # 返回测试损失、准确率
             # performance = [acc * 100, precision * 100, recall * 100, F1 * 100, total_auc * 100, total_prc * 100]
-            test_loss, test_acc, test_auc, test_prc, emb_test, label_test, performance = model_test(model, temporal_contr_model, test_dl, params, device, training_mode,
-                                                                model_F=model_F, model_F_optimizer=model_F_optimizer,
-                                                             classifier=classifier, classifier_optimizer=classifier_optimizer)
-
-            performance_list.append(performance)
-        performance_array = np.array(performance_list)
-        best_performance = performance_array[np.argmax(performance_array[:, 0], axis=0)]
-        print('Best Testing: Acc=%.4f| Precision = %.4f | Recall = %.4f | F1 = %.4f | AUROC= %.4f | PRC=%.4f'
-              % (best_performance[0], best_performance[1], best_performance[2], best_performance[3], best_performance[4], best_performance[5]))
-
-        # 训练KNN分类器
-        neigh = KNeighborsClassifier(n_neighbors=1)
-        neigh.fit(emb_finetune.detach().cpu().numpy(), label_finetune)
-        knn_acc_train = neigh.score(emb_finetune.detach().cpu().numpy(), label_finetune)
-        print('KNN finetune acc:', knn_acc_train)
-
-        # 测试KNN下游分类器
-        representation_test = emb_test.detach().cpu().numpy()
-        knn_result = neigh.predict(representation_test)
-        knn_result_score = neigh.predict_proba(representation_test)
-        one_hot_label_test = one_hot_encoding(label_test)
-        print(classification_report(label_test, knn_result, digits=4))
-        print(confusion_matrix(label_test, knn_result))
-        # Accuracy, Precision, Recall, F1 score, AUROC, AUPRC
-        knn_acc = accuracy_score(label_test, knn_result)
-        precision = precision_score(label_test, knn_result, average='macro', )
-        recall = recall_score(label_test, knn_result, average='macro', )
-        F1 = f1_score(label_test, knn_result, average='macro')
-        # if len(np.unique())
-        try:
-            auc = roc_auc_score(knn_result_score, one_hot_label_test, average="macro", multi_class="ovr")
-        except:
-            auc = 1.0
-        try:
-            prc = average_precision_score(knn_result_score, one_hot_label_test, average="macro")
-        except:
-            prc = 1.0
-        print("KNN Train Acc:{}. '\n' Test: acc {}, precision {}, Recall {}, F1 {}, AUROC {}, AUPRC {}"
-              "".format(knn_acc_train, knn_acc, precision, recall, F1, auc, prc))
+            test_loss, test_acc = model_test(model, test_dl, device, training_mode, classifier=classifier)
+        print('Best Testing: test_loss=%.4f| test_acc = %.4f' % (test_loss, test_acc))
 
     logger.debug("\n################## Training is Done! #########################")
 
 
-def model_pretrain(model, temporal_contr_model, model_optimizer, temp_cont_optimizer, criterion, train_loader, params,
-                   device, training_mode, model_F=None, model_F_optimizer=None):
+def model_pretrain(model, model_optimizer, train_loader, params_keep, device):
     """预训练模块"""
     total_loss = []
-    total_acc = []
-    total_auc = []
     model.train()
 
     # 开始一次循环
@@ -165,11 +126,14 @@ def model_pretrain(model, temporal_contr_model, model_optimizer, temp_cont_optim
         h_t, z_t, h_f, z_f = model(data, data_f)
         h_t_aug, z_t_aug, h_f_aug, z_f_aug = model(aug1, aug1_f)
 
+        fea_concat = torch.cat((z_t, z_f), dim=1)
+        # 将合并的特征图展平后输出，可用于其余分类器的训练
+        fea_concat_flat = fea_concat.reshape(fea_concat.shape[0], -1)
 
         """计算预训练损失"""
         """NTXentLoss：归一化温度标度交叉熵损失。来自SimCLR"""
-        nt_xent_criterion = NTXentLoss_poly(device, params["batch_size"], params["temperature"],
-                                       params["use_cosine_similarity"])
+        nt_xent_criterion = NTXentLoss_poly(device, params_keep["batch_size"], params_keep["temperature"],
+                                       params_keep["use_cosine_similarity"])
 
         # 计算时域的损失
         loss_t = nt_xent_criterion(h_t, h_t_aug)
@@ -191,32 +155,72 @@ def model_pretrain(model, temporal_contr_model, model_optimizer, temp_cont_optim
         # 优化一步
         model_optimizer.step()
 
-    print('preptraining: overall loss:{}, l_t: {}, l_f:{}, l_c:{}'.format(loss, loss_t, loss_f, loss_c))
     # 求总损失，为所有损失的均值
     total_loss = torch.tensor(total_loss).mean()
-    if training_mode == "pre_train":
-        total_acc = 0
-        total_auc = 0
-    else:
-        total_acc = torch.tensor(total_acc).mean()
-        total_auc = torch.tensor(total_auc).mean()
-    return total_loss, total_acc, total_auc
+
+    return total_loss, fea_concat_flat
 
 
-def model_finetune(model, temporal_contr_model, val_dl, params, device, training_mode, model_optimizer, model_F=None, model_F_optimizer=None,
-                   classifier=None, classifier_optimizer=None):
+def model_pretrain_test(emb_finetune, label_finetune, emb_test, label_test):
+    """
+    预训练阶段的测试函数
+    Args:
+        emb_finetune: 训练KNN的embbeddings
+        label_finetune: 训练KNN的label
+        emb_test: 测试KNN的embbeddings
+        label_test: 测试KNN的label
+
+    Returns:knn的测试准确率
+
+    """
+    neigh = KNeighborsClassifier(n_neighbors=1)
+    neigh.fit(emb_finetune.detach().cpu().numpy(), label_finetune)
+    knn_acc_train = neigh.score(emb_finetune.detach().cpu().numpy(), label_finetune)
+    print('KNN finetune acc:', knn_acc_train)
+    # 测试KNN下游分类器
+    representation_test = emb_test.detach().cpu().numpy()
+    knn_result = neigh.predict(representation_test)
+    print(classification_report(label_test, knn_result, digits=4))
+    print(confusion_matrix(label_test, knn_result))
+    knn_acc = accuracy_score(label_test, knn_result)
+    return knn_acc
+
+
+def get_emb(model, dl, device):
+    """
+    获取embbeddings
+    Args:
+        model: 输入的模型
+        dl: 需要映射的数据集
+        device: 设备
+
+    Returns: embbeddings和label
+
+    """
+    model.eval()
+    emb_all = []
+    trgs = np.array([])
+    with torch.no_grad():
+        for data, labels, aug1, data_f, aug1_f in dl:
+            data, labels = data.float().to(device), labels.long().to(device)
+            data_f = data_f.float().to(device)
+            h_t, z_t, h_f, z_f = model(data, data_f)
+
+            fea_concat = torch.cat((z_t, z_f), dim=1)
+            fea_concat_flat = fea_concat.reshape(fea_concat.shape[0], -1)
+            emb_all.append(fea_concat_flat)
+            trgs = np.append(trgs, labels.data.cpu().numpy())
+    return emb_all, trgs
+
+
+def model_finetune(model, val_dl, params_keep, device, model_optimizer, classifier=None, classifier_optimizer=None):
     """微调模块"""
     model.train()
     classifier.train()
 
     total_loss = []
     total_acc = []
-    total_auc = []  # it should be outside of the loop
-    total_prc = []
-
     criterion = nn.CrossEntropyLoss()
-    outs = np.array([])
-    trgs = np.array([])
 
     for data, labels, aug1, data_f, aug1_f in val_dl:
         data, labels = data.float().to(device), labels.long().to(device)
@@ -234,8 +238,9 @@ def model_finetune(model, temporal_contr_model, val_dl, params, device, training
 
         """计算微调损失"""
         """NTXentLoss：归一化温度标度交叉熵损失。来自SimCLR"""
-        nt_xent_criterion = NTXentLoss_poly(device, params["target_batch_size"], params["temperature"],
-                                            params["use_cosine_similarity"])
+
+        nt_xent_criterion = NTXentLoss_poly(device, params_keep["target_batch_size"], params_keep["temperature"],
+                                            params_keep["use_cosine_similarity"])
         # 计算时域损失
         loss_t = nt_xent_criterion(h_t, h_t_aug)
         # 计算频域损失
@@ -246,16 +251,14 @@ def model_finetune(model, temporal_contr_model, val_dl, params, device, training
                                                                                                             z_f_aug)
         loss_c = (1 + l_TF - l_1) + (1 + l_TF - l_2) + (1 + l_TF - l_3)
 
-
         """添加监督分类器：1）它是微调所特有的。2） 该分类器也将用于测试"""
         # 合并时域和频域的信息
         fea_concat = torch.cat((z_t, z_f), dim=1)
         # 此处定义为MLP
         predictions = classifier(fea_concat)
-        # 将合并的特征图展平后输出，可用于其余分类器的训练
-        fea_concat_flat = fea_concat.reshape(fea_concat.shape[0], -1)
+
         # 计算监督性的多分类交叉熵损失
-        loss_p = criterion(predictions, labels) # predictor loss, actually, here is training loss
+        loss_p = criterion(predictions, labels)
 
         # 所有的损失的加权和
         lam = 0.2
@@ -263,75 +266,30 @@ def model_finetune(model, temporal_contr_model, val_dl, params, device, training
 
         # 计算准确率
         acc_bs = labels.eq(predictions.detach().argmax(dim=1)).float().mean()
-        onehot_label = F.one_hot(labels)
-        pred_numpy = predictions.detach().cpu().numpy()
-        """避免发生只有一类的标签，无法回执ROC曲线"""
-        try:
-            auc_bs = roc_auc_score(onehot_label.detach().cpu().numpy(), pred_numpy, average="macro", multi_class="ovr")
-        except:
-            auc_bs = accuracy_score(labels.detach().cpu().numpy(), np.argmax(pred_numpy, axis=1))
-
-        # prc_bs = average_precision_score(onehot_label.detach().cpu().numpy(), pred_numpy)
-        try:
-            prc_bs = average_precision_score(labels.detach().cpu().numpy(), np.argmax(pred_numpy, axis=1))
-        except:
-            prc_bs = accuracy_score(labels.detach().cpu().numpy(), np.argmax(pred_numpy, axis=1))
 
         total_acc.append(acc_bs)
-        total_auc.append(auc_bs)
-        total_prc.append(prc_bs)
         total_loss.append(loss.item())
         loss.backward()
         model_optimizer.step()
         classifier_optimizer.step()
 
-        if training_mode != "pre_train":
-            pred = predictions.max(1, keepdim=True)[1]  # get the index of the max log-probability
-            outs = np.append(outs, pred.cpu().numpy())
-            trgs = np.append(trgs, labels.data.cpu().numpy())
-
-    # 将标签转换为numpy格式
-    labels_numpy = labels.detach().cpu().numpy()
-    pred_numpy = np.argmax(pred_numpy, axis=1)
-    # 计算查准率、召回率、F1分数
-    precision = precision_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
-    recall = recall_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
-    F1 = f1_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
-    print('Testing: Precision = %.4f | Recall = %.4f | F1 = %.4f' % (precision * 100, recall * 100, F1 * 100))
-
-    # """保存embeddings以进行可视化"""
-    # pickle.dump(features1_f, open('embeddings/fea_t_withLc.p', 'wb'))
-    # pickle.dump(fea_f, open('embeddings/fea_f_withLc.p', 'wb'))
-    # print('embedding saved')
-
     # 求取均值
     total_loss = torch.tensor(total_loss).mean()
     total_acc = torch.tensor(total_acc).mean()
-    total_auc = torch.tensor(total_auc).mean()
-    total_prc = torch.tensor(total_prc).mean()
-
-    return total_loss, total_acc, total_auc, total_prc, fea_concat_flat, trgs, F1
+    return total_loss, total_acc
 
 
-def model_test(model, temporal_contr_model, test_dl, params, device, training_mode, model_F=None, model_F_optimizer=None,
-               classifier=None, classifier_optimizer=None):
+def model_test(model, test_dl, device, training_mode, classifier=None):
     """测试模块"""
     # 将预训练模型和分类器置于评估模式，即不进行梯度传递
     model.eval()
     classifier.eval()
     total_loss = []
     total_acc = []
-    total_auc = []
-    total_prc = []
-    total_precision, total_recall, total_f1 = [], [], []
     # 定义多分类交叉熵损失
     criterion = nn.CrossEntropyLoss()
-    outs = np.array([])
-    trgs = np.array([])
-    emb_test_all = []
 
     with torch.no_grad():
-        labels_numpy_all, pred_numpy_all = np.zeros(0), np.zeros(0)
         for data, labels, _, data_f, _ in test_dl:
             # print('TEST: {} of target samples'.format(labels.shape[0]))
             data, labels = data.float().to(device), labels.long().to(device)
@@ -345,75 +303,15 @@ def model_test(model, temporal_contr_model, test_dl, params, device, training_mo
             # 输出MLP预测的结果
             predictions_test = classifier(fea_concat)
 
-            # 展平特征图
-            fea_concat_flat = fea_concat.reshape(fea_concat.shape[0], -1)
-            # 添加到一个列表里
-            emb_test_all.append(fea_concat_flat)
-
             if training_mode != "pre_train":
                 # 计算分类损失
                 loss = criterion(predictions_test, labels)
                 # 计算准确度
                 acc_bs = labels.eq(predictions_test.detach().argmax(dim=1)).float().mean()
-                onehot_label = F.one_hot(labels)
-                # 输出预测标签和实际标签
-                pred_numpy = predictions_test.detach().cpu().numpy()
-                labels_numpy = labels.detach().cpu().numpy()
-                """避免发生只有一类的标签，无法回执ROC曲线"""
-                try:
-                    auc_bs = roc_auc_score(onehot_label.detach().cpu().numpy(), pred_numpy, average="macro",
-                                           multi_class="ovr")
-                except:
-                    auc_bs = accuracy_score(labels.detach().cpu().numpy(), np.argmax(pred_numpy, axis=1))
-
-                try:
-                    prc_bs = average_precision_score(onehot_label.detach().cpu().numpy(), pred_numpy, average="macro")
-                except:
-                    prc_bs = accuracy_score(labels.detach().cpu().numpy(), np.argmax(pred_numpy, axis=1))
-
-                pred_numpy = np.argmax(pred_numpy, axis=1)
-                # precision = precision_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
-                # recall = recall_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
-                # F1 = f1_score(labels_numpy, pred_numpy, average='macro', )  # labels=np.unique(ypred))
-
-                # 将acc,auc,prc,loss添加到各自的列表里
+                # 将acc,auc添加到各自的列表里
                 total_acc.append(acc_bs)
-                total_auc.append(auc_bs)
-                total_prc.append(prc_bs)
                 total_loss.append(loss.item())
-
-                # 得到最大对数概率的索引。
-                pred = predictions_test.max(1, keepdim=True)[1]
-                # 添加预测标签到列表里
-                outs = np.append(outs, pred.cpu().numpy())
-                # 添加真实标签到列表里
-                trgs = np.append(trgs, labels.data.cpu().numpy())
-
-            labels_numpy_all = np.concatenate((labels_numpy_all, labels_numpy))
-            pred_numpy_all = np.concatenate((pred_numpy_all, pred_numpy))
-    labels_numpy_all = labels_numpy_all
-    pred_numpy_all = pred_numpy_all
-
-    # print('Test classification report', classification_report(labels_numpy_all, pred_numpy_all))
-    # print(confusion_matrix(labels_numpy_all, pred_numpy_all))
-    # 计算精准度、召回率、F1分数和准确率
-    precision = precision_score(labels_numpy_all, pred_numpy_all, average='macro', )
-    recall = recall_score(labels_numpy_all, pred_numpy_all, average='macro', )
-    F1 = f1_score(labels_numpy_all, pred_numpy_all, average='macro', )
-    acc = accuracy_score(labels_numpy_all, pred_numpy_all, )
-
     # 取均值
     total_loss = torch.tensor(total_loss).mean()
     total_acc = torch.tensor(total_acc).mean()
-    total_auc = torch.tensor(total_auc).mean()
-    total_prc = torch.tensor(total_prc).mean()
-
-    # precision_mean = torch.tensor(total_precision).mean()
-    # recal_mean = torch.tensor(total_recall).mean()
-    # f1_mean = torch.tensor(total_f1).mean()
-    performance = [acc * 100, precision * 100, recall * 100, F1 * 100, total_auc * 100, total_prc * 100]
-    print('Testing: Acc=%.4f| Precision = %.4f | Recall = %.4f | F1 = %.4f | AUROC= %.4f | PRC=%.4f'
-          % (acc*100, precision * 100, recall * 100, F1 * 100, total_auc*100, total_prc*100))
-
-    emb_test_all = torch.concat(tuple(emb_test_all))
-    return total_loss, total_acc, total_auc, total_prc, emb_test_all, trgs, performance
+    return total_loss, total_acc
